@@ -1,0 +1,42 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "ISN 2026 | Universidade do Algarve"
+  navbar:
+    search: true
+    tools:
+      - icon: house-heart-fill
+        menu:
+          - text: Universidade do Algarve
+            url: https://www.ualg.pt/  
+    left:
+      - href: index.qmd
+        text: "Welcome"
+      - href: learning_R.qmd
+        text: "Learning R"
+      - href: software_req.qmd
+        text: "Software requirements"
+      - href: protocols.qmd
+        text: "Protocols R"
+      # - href: protocols_ML.qmd
+      #   text: "Protocols ML"
+      - href: protocols_rnaseq.qmd
+        text: "Protocols RNAseq"
+          
+  back-to-top-navigation: true
+  page-footer: 
+    left: "Copyright 2026, Isabel Duarte" 
+    right: 
+      - icon: github
+        href: https://github.com/instructr/isn.bioinf.2026
+    background: light
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-expand: 2
+
+editor: source

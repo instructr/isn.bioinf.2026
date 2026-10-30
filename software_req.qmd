@@ -1,0 +1,28 @@
+## **Software requirements** 
+
+To follow the these classes, you will use use **R** and **RStudio**, and will need to **bring your own laptop** (not a tablet).
+
+
+**You have 2 options:**   
+
+**Option 1** | Use RStudio Server provided in class (**preferred option**)
+
+  - Connect to the `ualg-conferencias` network at UAlg.
+  - Open your favorite browser and access the web address `https://rise-cafe.ualg.pt/rstudio/`.
+  - Login with the `Username` and `password` credentials provided to you in class.
+  - NOTE | This access will NOT work from outside the university of Algarve.
+    
+
+
+**Option 2** | Install **R** and **RStudio** on your personal computer
+
+  - **First install R** | <https://www.r-project.org/>  
+  To download R, choose any CRAN mirror from <https://cran.r-project.org/mirrors.html>, or use <https://cloud.r-project.org/>, which automatically redirects you to a nearby mirror.
+  Then select the installer for your operating system (Windows, macOS or Linux).
+  - **Next install RStudio** | <https://posit.co/download/rstudio-desktop/#download>  
+  RStudio requires R to be installed first.
+  - **If you have a Windows machine, also install Rtools** | <https://cran.r-project.org/bin/windows/Rtools/>  
+  Choose the Rtools version that matches your R version (for example, R 4.5.x needs Rtools45). Rtools is needed to install packages that must be compiled from source.
+  - **If you have a Mac** (optional), you may also need the Xcode Command Line Tools to compile packages from source. To install them, open the Terminal and run `xcode-select --install`.
+
+---

@@ -1,0 +1,48 @@
+---
+title: "Learning R"
+author: "Isabel Duarte"
+date: "October 2026"
+output:
+  html_document:
+  smooth_scroll: true
+  fig_caption: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache=FALSE, eval=TRUE)
+```
+<!-- regular html comment -->
+
+---
+
+Bioinformatics for Neurosciences | ISN 2026    
+Universidade do Algarve, Faro, Portugal    
+Isabel Duarte | giduarte at ualg dot pt | Website: [http://iduarte.eu/](http://iduarte.eu/)
+
+---
+
+## **General Information**
+
+**Learning outcomes | Knowledge, Skills, and Competences**
+
+The participants will acquire basic knowledge in the application of computational analysis techniques to biological data using R.
+
+The following topics will be addressed in the 'Intro to R data analysis': 
+
++ **Introduction to R programming**;
++ **Descriptive statistics using R**;
++ **Brief exploratory data analysis of a biological dataset**.
+
+<br>
+
+### Classes documents
+
+Additional files required for exercises
+
+  - 1. [Mice diet dataset](data/mice_data.txt)
+  
+  - 2. [Zebrafish morphometrics dataset](data/zebrafish.csv)
+
+---
+
+{{< include protocols/_0_contents_biblio.qmd >}}

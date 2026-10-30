@@ -1,0 +1,9 @@
+---
+title: "Welcome | ISN 2026"
+date: "October 2026"
+author: "Carolin Hoffmann, Dany Mukesha, Isabel Duarte"
+output:
+  html_document:
+  smooth_scroll: true
+  fig_caption: false
+---
