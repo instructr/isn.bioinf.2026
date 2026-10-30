@@ -1,5 +1,5 @@
 ---
-title: "Learning R"
+title: "General Information"
 author: "Isabel Duarte"
 date: "October 2026"
 output:

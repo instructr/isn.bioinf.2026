@@ -1,0 +1,541 @@
+---
+title: "From Raw Data to Machine Learning in R"
+subtitle: "Hands-on workshop with real Alzheimer's data (OASIS brain MRI dataset)"
+author: "Dany Mukesha"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    code-copy: true
+execute:
+  echo: true
+  message: false
+  warning: false
+  fig-width: 8
+  fig-height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(42)
+```
+
+# Welcome
+
+no bioinformatics, statistics, or machine learning background assumed here.
+If you can run a line of R code, you can complete this workshop.
+
+**What will you learn?** By the end you will have built, evaluated, and
+interpreted machine learning models that classify research subjects as
+*demented* or *nondemented* from real demographics, cognitive testing, and
+MRI brain measurements; and you will understand every step between the raw
+table and the prediction.
+
+**The dataset.** The [OASIS-1 Cross-Sectional dataset](https://sites.wustl.edu/oasisbrains/home/oasis-1/)
+(Marcus et al., 2007; Washington University School of Medicine) contains
+brain MRI scans and clinical data from **436 adults aged 18–96**. For 235
+of them; the older cohort, expert clinicians assigned a **Clinical
+Dementia Rating (CDR)**: 
+
+* 0 = nondemented, 
+* \> 0 = demented. 
+
+Alongside each scan we have age, sex, education, socioeconomic status, 
+the **MMSE** cognitive test score, and three MRI-derived brain-volume measures.
+The CSV is downloaded automatically from a public mirror; nothing needs to be
+installed by hand.
+
+**How to run this document.** Open it in RStudio and click *Render*, or run
+the chunks one at a time with `Ctrl+Enter` (Cmd+Enter on Mac). Total runtime
+is about 1–2 minutes on a laptop.
+
+```{r}
+#| label: packages
+library(dplyr) # data manipulation (filter, select, group_by...)
+library(tidyr) # also data manupulation (drop_na, ...)
+library(ggplot2) # plotting
+library(caret) # splitting, training, resampling
+library(recipes) # preprocessing "recipes" applied inside CV
+library(randomForest) # random forest model engine
+library(glmnet) # penalized regression engine (used via caret)
+library(pROC) # ROC curves and AUC
+
+## library(tidyverse) # this is an eco-system of R programming, that we cover later.
+```
+
+# The big picture
+
+Every supervised machine learning project follows the same arc:
+
+> **Import → Clean → Explore → Split → Train → Evaluate → Interpret**
+
+Three rules keep the results honest; we will apply all three:
+
+1. **Split before you transform.** Any step that "learns" from the data
+   (scaling, imputation, feature selection) must be fitted on training data
+   only, otherwise information leaks from test data into training, 
+   *data leakage*, and performance looks better than it is.
+2. **Touch the test set once, at the very end.** The test set simulates
+   future patients. Peek at it repeatedly and it stops being a test.
+3. **Start simple.** A plain logistic regression is the baseline; a fancier
+   model must clearly beat it to earn its complexity.
+
+# Step 1: Import the raw data
+
+Rule: never modify the original file. We load it into R and work on a copy.
+If the CSV is already in your working folder we use it; otherwise we
+download it once from a public mirror.
+
+```{r}
+#| label: import
+data_file <- "oasis_cross-sectional.csv"
+if (!file.exists(data_file)) {
+  download.file(
+    url = paste0("https://raw.githubusercontent.com/jddunn/",
+                 "dementia-progression-analysis/master/",
+                 "oasis_cross-sectional.csv"),
+    destfile = data_file
+  )
+}
+raw_data <- read.csv(data_file, na.strings = c("N/A", ""))
+
+cat("Raw data dimensions:", nrow(raw_data), "rows x", ncol(raw_data), "columns\n")
+head(raw_data, 3)
+```
+
+436 subjects, 12 columns. Note `na.strings`: this file writes missing
+values as the text `"N/A"`, and without this argument R would treat them as
+text; a classic import trap.
+
+Here is also a brief explanation of each feature
+
+| Feature | Description |
+| --- | --- |
+| `ID` | Participant or scan identifier. |
+| `M.F` | Sex: male or female. |
+| `Hand` | Handedness: right or left. |
+| `Age` | Age in years. |
+| `Educ` | Education level or years of education, depending on coding. |
+| `SES` | Socioeconomic status. |
+| `MMSE` | Cognitive test score (0–30); higher scores indicate better cognition. |
+| `CDR` | Dementia severity rating; higher scores indicate greater impairment. |
+| `eTIV` | Estimated total intracranial volume. |
+| `nWBV` | Normalized whole-brain volume. |
+| `ASF` | MRI atlas scaling factor. |
+| `Delay` | Time between visits or scans, usually in months. |
+
+# Step 2: Clean and tidy
+
+Real data is always messy. We drop columns that cannot predict anything,
+define the outcome, and keep the subjects who were actually tested.
+
+```{r}
+#| label: clean
+data <- raw_data |>
+  select(-ID, -Hand, -Delay) |> # no signal, or no variation
+  filter(!is.na(CDR)) |> # keep tested (older) subjects
+  mutate(Dementia = factor(ifelse(CDR > 0, "demented", "nondemented"),
+                           levels = c("demented", "nondemented"))) |>
+  select(-CDR) # CDR is now the outcome itself
+
+cat("Subjects with complete diagnostic testing:", nrow(data), "\n")
+cat("Age range:", range(data$Age), "years\n")
+```
+
+Three quiet teaching points hide in that chunk:
+
+- **`Hand` is dropped because everyone is right-handed.** A column with
+  zero variation cannot help a model; always check for these.
+- **`Delay` is dropped** it only describes scan logistics.
+- **The outcome is derived, not given.** The file has no "diagnosis"
+  column; we build it from the CDR. Deriving outcomes from clinical scales
+  is everyday work in medical data science.
+
+```{r}
+#| label: clean2
+cat("Missing values per column:\n")
+print(colSums(is.na(data)))
+```
+
+Only `SES` (socioeconomic status) has missing values: 19 of 235 subjects
+(8%). Normally, we can *drop* rows with large % of missin value, here
+dropping 8% of patients would waste real data, so we **impute with the
+median** instead, and we will let the model pipeline do it *inside*
+cross-validation (Step 5), so no information leaks.
+
+# Step 3: Explore the data (EDA)
+
+Always look before you model. First: how balanced are the two classes?
+
+```{r}
+#| label: eda-balance
+table(data$Dementia)
+```
+
+100 demented vs 135 nondemented, mildly imbalanced, which is why we will
+use **stratified splitting** and **AUC** rather than plain accuracy.
+
+Next: do the measurements differ between the two groups?
+
+```{r}
+#| label: eda-sex-distribution
+#| fig-height: 6
+data |> 
+  select(M.F) |> 
+  table() 
+```
+
+```{r}
+#| label: eda-boxplots
+#| fig-height: 6
+plot_features <- c("Age", "MMSE", "nWBV", "eTIV")
+eda_long <- data |>
+  tidyr::pivot_longer(cols = all_of(plot_features),
+                      names_to = "feature", values_to = "value")
+ggplot(eda_long, aes(x = Dementia, y = value, fill = Dementia)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  facet_wrap(~ feature, scales = "free_y") +
+  scale_fill_manual(values = c("demented"    = "#C4451C",
+                               "nondemented" = "#2C7BB6")) +
+  labs(title = "Demographics, cognition and brain volume by diagnosis",
+       x = "Diagnosis", y = NULL) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "none")
+```
+
+What to notice:
+
+- **MMSE** (cognitive test, 0–30): clearly lower in the demented group ->
+  strong signal.
+- **nWBV** (normalized whole-brain volume): smaller brains, more dementia ->
+  the MRI biology showing up in the data.
+- **Age**: demented subjects are older, on average.
+- **eTIV** (total intracranial volume): much less separated -> head size is
+  not the disease.
+
+Finally, a correlation check:
+
+```{r}
+#| label: eda-corr
+corr_mat <- cor(data |> select(where(is.numeric)), use = "complete.obs")
+corr_mat |> 
+  round(2)
+```
+
+
+```{r include=FALSE}
+cat("Largest absolute correlation between two features:",
+    round(max(abs(corr_mat[upper.tri(corr_mat)])), 2), "\n")
+```
+
+Two MRI features correlate at **r = -0.99** -> `ASF` is essentially a
+rescaled inverse of `eTIV`. Redundant features cause trouble for plain
+regression and motivate the *penalized* model we will train later.
+
+<details>
+<summary>Click here to expand the section (Principal component analysis - PCA)</summary>
+
+```{r pca}
+#| label: pca-plot
+#| fig-height: 4
+#| fig-width: 6
+vars <- c("Age", "Educ", "SES", "MMSE", "eTIV", "nWBV", "ASF")
+df <- data |> drop_na(all_of(vars), Dementia)
+pca <- prcomp(df |> select(all_of(vars)), scale. = TRUE)
+
+scores <- as_tibble(pca$x[, 1:2]) |> mutate(Dementia = df$Dementia)
+
+ggplot(scores, aes(PC1, PC2, color = Dementia)) +
+  geom_point() +
+  stat_ellipse(level = 0.95, linewidth = 1) +
+  scale_color_manual(values = c("demented" = "#C4451C",
+                               "nondemented" = "#2C7BB6")) +
+  theme_bw()
+```
+
+</details>
+
+# Step 4: Split: training vs test set
+
+We keep 80% of subjects for model development and hold out 20% for the
+single final evaluation. The split is **stratified** -> it preserves the
+demented/nondemented ratio in both sets.
+
+```{r}
+#| label: split
+set.seed(42)  # makes the random split reproducible for everyone
+train_index <- createDataPartition(data$Dementia, p = 0.8, list = FALSE)
+train_data  <- data[ train_index, ]
+test_data   <- data[-train_index, ]
+
+cat("Training set:", nrow(train_data), "subjects |",
+    "Test set:", nrow(test_data), "subjects\n")
+```
+
+# Step 5: Define resampling and preprocessing
+
+**Cross-validation (CV)** answers the question *"how well will this model
+work on subjects it has never seen?"* without touching the test set: the
+training data is split into 5 parts; the model trains on 4 and is evaluated
+on the 5th, repeated 5 times so every part is used for evaluation once.
+
+```{r}
+#| label: cv-control
+cv_control <- trainControl(
+  method = "cv", # k-fold cross-validation
+  number = 5, # k = 5
+  classProbs = TRUE, # needed for ROC/AUC
+  summaryFunction = twoClassSummary
+)
+
+preprocess_recipe <- recipe(Dementia ~ ., data = train_data) |>
+  step_impute_median(all_numeric_predictors()) |> # fill NA in SES
+  step_zv(all_numeric_predictors()) |> # drop zero-variance
+  step_center(all_numeric_predictors()) |> # mean = 0
+  step_scale(all_numeric_predictors()) # sd = 1
+```
+
+The **recipe** is a preprocessing *plan*, not a one-time transformation:
+caret re-executes it within each CV split, re-estimating the imputation
+medians and scaling values from that split's training portion only. That is
+exactly what prevents data leakage (Rule 1) -> including for the SES
+imputation.
+
+# Step 6: Train three candidate models
+
+We compare three approaches of increasing complexity:
+
+| Model | Idea | Interpretability |
+|---|---|---|
+| Logistic regression | linear relationship between features and log-odds | high |
+| Penalized regression (glmnet) | like above, but shrinks coefficients to handle correlated features | medium |
+| Random forest | ensemble of decision trees; captures non-linear patterns | lower |
+
+```{r}
+#| label: train-glm
+set.seed(42)
+model_glm <- train(
+  preprocess_recipe, data = train_data,
+  method = "glm", family = binomial,
+  metric = "ROC", trControl = cv_control
+)
+```
+
+```{r warning=FALSE}
+#| label: train-glmnet
+# caret picks the binomial family automatically for a two-class outcome.
+set.seed(42)
+model_glmnet <- train(
+  preprocess_recipe, data = train_data,
+  method = "glmnet",
+  metric = "ROC", trControl = cv_control,
+  tuneLength = 10
+)
+```
+
+```{r}
+#| label: train-rf
+set.seed(42)
+model_rf <- train(
+  preprocess_recipe, data = train_data,
+  method = "rf",
+  metric = "ROC", trControl = cv_control,
+  tuneGrid = data.frame(mtry = c(2, 3, 4, 6))  # features tried per split
+)
+```
+
+# Step 7: Compare models by cross-validated AUC
+
+**AUC** (area under the ROC curve) is the probability that a random
+demented subject receives a higher risk score than a random nondemented
+one: 0.5 = coin flip, 1.0 = perfect ranking.
+
+```{r}
+#| label: compare
+cv_results <- resamples(list(
+  `Logistic regression` = model_glm,
+  `Penalized (glmnet)`  = model_glmnet,
+  `Random forest`       = model_rf
+))
+round(summary(cv_results)$statistics$ROC[, "Mean", drop = FALSE], 3)
+```
+
+AUC ≈ 0.89-0.90
+
+realistic for clinical data. The differences between models are small.
+
+# Step 8: Select the best model
+
+```{r}
+#| label: select
+cv_means   <- sapply(list(model_glm, model_glmnet, model_rf),
+                     function(m) max(m$results$ROC))
+best_i     <- which.max(cv_means)
+best_model <- list(model_glm, model_glmnet, model_rf)[[best_i]]
+cat("Best model by CV AUC:", c("logistic regression", "penalized glmnet",
+    "random forest")[best_i], sprintf("(CV AUC = %.3f)", cv_means[best_i]), "\n")
+```
+
+With differences this small, prefer the **simpler, more interpretable**
+model in practice; here the random forest edges out the others, but note
+in your own re-runs how sensitive this choice can be to the random split
+(Exercise 1).
+
+# Step 9: Final evaluation on the test set (once!)
+
+The moment of truth. The test set has played no role in any decision so far.
+
+```{r}
+#| label: test-eval
+pred_class <- predict(best_model, newdata = test_data)
+pred_prob <- predict(best_model, newdata = test_data, type = "prob")[, 1]
+
+confusionMatrix(pred_class, test_data$Dementia, positive = "demented")
+```
+
+```{r}
+#| label: cm
+#| fig-height: 4
+#| fig-width: 4.5
+cm <- as.data.frame(confusionMatrix(pred_class, test_data$Dementia,
+                                    positive = "demented")$table)
+colnames(cm) <- c("Prediction", "Reference", "Count")
+
+ggplot(cm, aes(Reference, Prediction, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 4) +
+  scale_x_discrete(limits = c("demented", "nondemented")) +
+  scale_y_discrete(limits = rev(c("demented", "nondemented"))) +
+  scale_fill_gradient(low = "white", high = "#2C7BB6") +
+  guides(fill = "none") +
+  theme_bw()
+```
+
+
+How to read the confusion matrix:
+
+- **Sensitivity** (85%): of the truly demented subjects, how many did we
+  catch? Missing a dementia diagnosis delays treatment and support.
+- **Specificity** (96%): of the truly nondemented subjects, how many did we
+  correctly leave alone? A false alarm causes anxiety and unnecessary
+  follow-up.
+
+```{r}
+#| label: roc
+#| fig-height: 5.5
+#| fig-width: 5.5
+roc_obj <- roc(test_data$Dementia, pred_prob,
+               levels = c("nondemented", "demented"), direction = "<")
+cat(sprintf("Test-set AUC: %.3f (95%% CI %.3f-%.3f)\n",
+            auc(roc_obj), ci.auc(roc_obj)[1], ci.auc(roc_obj)[3]))
+plot(roc_obj, col = "#C4451C", lwd = 2,
+     main = sprintf("Test-set ROC (AUC = %.3f)", auc(roc_obj)))
+abline(a = 0, b = 1, lty = 2, col = "grey50")
+```
+
+<details>
+<summary>Click here to expand the section (ROC curve with ggplot2 and pROC pkgs)</summary>
+
+```{r}
+#| label: roc-ggplto2-pROC
+#| fig-height: 5.5
+#| fig-width: 5.5
+roc_obj <- roc(test_data$Dementia, pred_prob,
+               levels = c("nondemented", "demented"), direction = "<")
+
+ggroc(roc_obj, color = "#C4451C", linewidth = 1.2) +
+  geom_abline(slope = 1, intercept = 1, linetype = "dashed", color = "grey50") +
+  labs(title = sprintf("Test-set ROC (AUC = %.3f)", auc(roc_obj)),
+       x = "1 - Specificity", y = "Sensitivity") +
+  theme_bw()
+```
+
+</details>
+
+# Step 10: Interpret: what drives the prediction?
+
+```{r}
+#| label: importance
+#| fig-height: 5
+varImp(best_model, scale = FALSE) |> plot(top = 8,
+     main = "Predictive importance of Alzheimer's risk features")
+```
+
+<details>
+<summary>Click here to expand the section (feature important plot with ggplot2 pkg)</summary>
+
+```{r}
+#| label: importance-ggplot2
+#| fig-height: 5
+importance <- varImp(best_model, scale = FALSE)$importance |>
+  tibble::rownames_to_column("Feature") |>
+  slice_max(order_by = Overall, n = 8) 
+
+ggplot(importance, aes(x = reorder(Feature, Overall), y = Overall)) +
+  geom_col(fill = "grey") +
+  coord_flip() +
+  labs(title = "Predictive importance of Alzheimer's risk features",
+       x = NULL, y = "Importance") +
+  theme_bw()
+```
+
+</details>
+
+**MMSE dominates**, and that deserves a critical pause. MMSE is a
+*cognitive test for dementia symptoms*: the model is partly predicting the
+diagnosis from a symptom score, which is circular-ish and less interesting
+scientifically than the question *"can brain volume predict dementia
+before symptoms?"* Try Exercise 4: remove MMSE and see how far MRI features
+alone get you. This, asking what a model's inputs *mean*, is the most
+important interpretive habit in applied machine learning.
+
+# Step 11: Save the model for future use
+
+```{r}
+#| label: save
+#| echo: true
+#| eval: false
+# The saved object bundles preprocessing + model, so new subjects can be
+# scored later with:  predict(readRDS("final_model.rds"), new_subjects)
+saveRDS(best_model, "final_model.rds")
+```
+
+# Key takeaways
+
+1. **The pipeline is the product.** Import → clean → explore → split →
+   train → evaluate → interpret. Skipping the explore step is how people
+   model garbage.
+2. **Leakage is the #1 silent killer.** Impute, scale, and select features
+   *inside* cross-validation (recipes make this easy), never before splitting.
+3. **The test set is sacred.** One look, at the end.
+4. **Real data gives realistic numbers.** AUC 0.94 on real clinical data is
+   a good result, be suspicious of 0.99.
+5. **Interrogate what the inputs mean.** A model that predicts dementia
+   from a dementia symptom score has learned less than its AUC suggests.
+
+# Exercises
+
+1. Change `set.seed(42)` to another number and re-render. How much do the
+   test-set metrics and the "best model" choice move? What does that tell
+   you about a single 20% test split with only 235 subjects?
+2. Drop the redundant feature (`select(-ASF)`) and rebuild. Does
+   performance change? What about interpretability?
+3. The 3 demented subjects we missed (false negatives) are the costly
+   errors. Try `trainControl(..., sampling = "up")`; can sensitivity be
+   improved without collapsing specificity?
+4. (Advanced) Remove MMSE (`select(-MMSE)`) and rebuild. How far do age,
+   demographics, and MRI features alone get you? Which MRI feature matters
+   most now?
+
+# References
+
+- Marcus, D.S. et al. (2007). Open Access Series of Imaging Studies (OASIS):
+  Cross-sectional MRI data in young, middle aged, nondemented, and demented
+  older adults. *Journal of Cognitive Neuroscience* 19(9).
+- Kuhn, M. (2008). Building predictive models in R using the caret package.
+  *Journal of Statistical Software* 28(5).
+- Data: [OASIS Brains, Washington University School of Medicine](https://sites.wustl.edu/oasisbrains/home/oasis-1/)
+  (CSV mirrored on GitHub for workshop convenience).

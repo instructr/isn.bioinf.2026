@@ -14,16 +14,23 @@ website:
     left:
       - href: index.qmd
         text: "Welcome"
-      - href: learning_R.qmd
-        text: "Learning R"
-      - href: software_req.qmd
-        text: "Software requirements"
-      - href: protocols.qmd
-        text: "Protocols R"
-      # - href: protocols_ML.qmd
-      #   text: "Protocols ML"
-      - href: protocols_rnaseq.qmd
-        text: "Protocols RNAseq"
+      - text: "Learning R"
+        menu:
+          - href: general_info.qmd
+            text: "General information"
+          - href: software_req.qmd
+            text: "Software requirements"
+          - href: protocols_r.qmd
+            text: "Protocols R"
+      - text: "RNAseq"
+        menu:
+          - href: protocols_rnaseq.qmd
+            text: "Protocols RNAseq"
+      - text: "Machine Learning"
+        menu:
+          - href: protocols_ml.qmd
+            text: "Protocols ML"
+      
           
   back-to-top-navigation: true
   page-footer: 
